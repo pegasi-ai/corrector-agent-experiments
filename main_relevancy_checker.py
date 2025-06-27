@@ -429,12 +429,15 @@ def main():
             original_text = st.session_state.original_text
             
             # Overall metrics
-            col2a, col2b = st.columns(2)
+            col2a, col2b, col2c = st.columns(3)
             with col2a:
-                st.metric("Number of Links", len(analysis.relevancies))
+                st.metric("Total Links", len(analysis.relevancies))
             with col2b:
                 irrelevant_count = sum(1 for relevancy in analysis.relevancies if not relevancy.relevant or relevancy.relevant == "No")
-                st.metric("Number of Irrelevant Links", irrelevant_count)
+                st.metric("Irrelevant Links", irrelevant_count)
+            with col2c:
+                accuracy = (len(analysis.relevancies)-irrelevant_count)/len(analysis.relevancies) if len(analysis.relevancies) > 0 else 0
+                st.metric("Overall Accuracy", f"{accuracy:.1%}")
             
             # Relevancy list
             if analysis.relevancies:
@@ -442,7 +445,17 @@ def main():
                 # Detailed relevancies
                 st.subheader("📋 Detailed Explanation")
                 for i, relevancy in enumerate(analysis.relevancies, 1):
-                    with st.expander(f"Link {i} (Confidence: {relevancy.confidence:.1%})"):
+                    is_irrelevant = not relevancy.relevant or relevancy.relevant == "No"
+                    if is_irrelevant:
+                        expander_label = f"🔴 Link {i} (Confidence: {relevancy.confidence:.1%})"
+                    else:
+                        expander_label = f"🟢 Link {i} (Confidence: {relevancy.confidence:.1%})"
+                    with st.expander(expander_label, expanded=is_irrelevant):
+                        # if is_irrelevant:
+                        #     st.markdown(
+                        #         f"<h4 style='color: #b71c1c; font-weight: bold; margin-bottom: 0.5em;'>Irrelevant Link</h4>",
+                        #         unsafe_allow_html=True
+                        #     )
                         st.markdown("**Original:**")
                         st.markdown(f'<div style="background-color: #ffebee; padding: 10px; border-radius: 5px;">{relevancy.original_text}</div>', unsafe_allow_html=True)
                         st.markdown("**Website Link:**")
