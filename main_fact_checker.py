@@ -430,7 +430,7 @@ def main():
                     st.text_area("Original Content", plain_text, height=300, disabled=True)
 
 
-                text_links_per_citation, text_links_per_chunk = preprocess.run(html_content)
+                text_links_per_citation, text_links_per_chunk = preprocess.run_href(html_content)
 
                 # # tmp
                 # text, links = text_links_per_chunk[3]['text'], text_links_per_chunk[3]['citations']
