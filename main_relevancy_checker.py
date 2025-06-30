@@ -10,7 +10,7 @@ import PyPDF2
 import json
 from datetime import datetime
 from docx import Document
-from docx.shared import RGBColor
+from docx.shared import RGBColor, Pt
 from docx.oxml.shared import OxmlElement, qn
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_openai_functions_agent, create_structured_chat_agent
@@ -19,6 +19,8 @@ from langchain.schema import BaseMessage
 from langchain.tools import BaseTool
 from langchain_core.tools import tool
 import preprocess
+from docx import Document
+
 
 load_dotenv()  # This loads variables from .env into the environment
 
@@ -193,6 +195,89 @@ def create_relevancy_report_word_document(relevancies: List[Relevancy], filename
             
             doc.add_paragraph('─' * 60)
     
+    doc_bytes = io.BytesIO()
+    doc.save(doc_bytes)
+    doc_bytes.seek(0)
+    return doc_bytes.getvalue()
+
+def add_relevancy_annotations_to_docx(file_content, relevancies):
+    from docx import Document
+    from docx.shared import RGBColor, Pt
+    import io
+    import re
+
+    doc = Document(io.BytesIO(file_content))
+    
+    # Create a dictionary mapping each URL to a list of its relevancy analyses
+    relevancy_map = {}
+    for r in relevancies:
+        if r.website_link not in relevancy_map:
+            relevancy_map[r.website_link] = []
+        relevancy_map[r.website_link].append(r)
+
+    url_pattern = r'https?://[^\s\)]+'
+    
+    for para in doc.paragraphs:
+        para_text = para.text
+        url_matches = list(re.finditer(url_pattern, para_text))
+        
+        if not url_matches:
+            continue
+
+        annotations_to_add = []
+        for match in url_matches:
+            url = match.group(0)
+            
+            # Check if this URL has any relevancy info
+            if url in relevancy_map:
+                url_start, url_end = match.span()
+                context_before = para_text[max(0, url_start - 100):url_start].strip()
+                
+                best_match_relevancy = None
+                max_matching_words = -1
+
+                # Find best match from candidates for this URL
+                for relv in relevancy_map[url]:
+                    text_context = relv.original_text
+                    words_to_check = set(text_context.split())
+                    num_matching = sum(1 for word in words_to_check if word in context_before)
+                    
+                    if num_matching > max_matching_words:
+                        max_matching_words = num_matching
+                        best_match_relevancy = relv
+                
+                if best_match_relevancy and max_matching_words > 0:
+                    annotations_to_add.append({
+                        'start': url_start,
+                        'end': url_end,
+                        'relevancy': best_match_relevancy
+                    })
+
+        if annotations_to_add:
+            annotations_to_add.sort(key=lambda x: x['start'])
+            
+            para.clear()
+            last_pos = 0
+            
+            for annotation in annotations_to_add:
+                para.add_run(para_text[last_pos:annotation['start']])
+                para.add_run(para_text[annotation['start']:annotation['end']])
+                
+                relv = annotation['relevancy']
+                annotation_text = f" [Relevancy: {relv.relevant}, Reason: {relv.reason}, Confidence: {relv.confidence:.1%}]"
+                annotation_run = para.add_run(annotation_text)
+                
+                if not relv.relevant or relv.relevant == "No":
+                    annotation_run.font.color.rgb = RGBColor(255, 0, 0)
+                    annotation_run.font.bold = True
+                else:
+                    annotation_run.font.color.rgb = RGBColor(0, 128, 0)
+                    annotation_run.font.bold = True
+
+                last_pos = annotation['end']
+
+            para.add_run(para_text[last_pos:])
+
     doc_bytes = io.BytesIO()
     doc.save(doc_bytes)
     doc_bytes.seek(0)
@@ -472,14 +557,23 @@ def main():
                     base_filename = uploaded_file.name.replace('.pdf', '').replace('.docx', '')
                 else:
                     base_filename = "document"
-                
-                word_doc_bytes = create_relevancy_report_word_document(analysis.relevancies, uploaded_file.name if uploaded_file else "document")
-                st.download_button(
-                    label="📄 Download Relevancy Report",
-                    data=word_doc_bytes,
-                    file_name=f"relevancy_report_{base_filename}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+                # If .docx, export with annotations on links
+                if uploaded_file and uploaded_file.name.lower().endswith('.docx'):
+                    annotated_docx_bytes = add_relevancy_annotations_to_docx(file_content, analysis.relevancies)
+                    st.download_button(
+                        label="📄 Download Relevancy Report (with annotations)",
+                        data=annotated_docx_bytes,
+                        file_name=f"relevancy_report_{base_filename}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+                else:
+                    word_doc_bytes = create_relevancy_report_word_document(analysis.relevancies, uploaded_file.name if uploaded_file else "document")
+                    st.download_button(
+                        label="📄 Download Relevancy Report",
+                        data=word_doc_bytes,
+                        file_name=f"relevancy_report_{base_filename}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
             else:
                 st.success("🎉 No irrelevant errors found! The links appear to be relevant.")
         
