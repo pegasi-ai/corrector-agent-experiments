@@ -2,8 +2,10 @@ from docx import Document
 import mammoth
 import textwrap
 from html import unescape
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Any
 import re
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import mistune
 
 
 # load file
@@ -15,11 +17,54 @@ def docx_to_html(path: str) -> str:
         # result.messages contains any warnings
         return result.value
     
+def split_plaintext_into_sections(plain_text: str, chunk_size: int = 1000, chunk_overlap: int = 100) -> list:
+    """
+    Split plain text into sections using LangChain's RecursiveCharacterTextSplitter.
+    Returns a list of section strings.
+    """
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    return splitter.split_text(plain_text)
+
 # split data
 def split_html_into_paragraphs(html):
-    # Use regex to find all <p>...</p> blocks
-    paragraphs = re.findall(r'<p.*?>.*?</p>', html, re.DOTALL)
-    return paragraphs
+    
+    # First, extract tables and replace them with placeholders to avoid interference
+    table_placeholders = []
+    table_counter = 0
+    
+    def replace_table_with_placeholder(match):
+        nonlocal table_counter
+        placeholder = f"__TABLE_PLACEHOLDER_{table_counter}__"
+        table_placeholders.append((placeholder, match.group(0)))
+        table_counter += 1
+        return placeholder
+    
+    # Replace tables with placeholders (non-greedy to handle nested tables)
+    html_without_tables = re.sub(r'<table.*?>.*?</table>', replace_table_with_placeholder, html, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Use regex to find all <p>...</p> blocks in the HTML without tables
+    paragraphs = re.findall(r'<p.*?>.*?</p>', html_without_tables, re.DOTALL | re.IGNORECASE)
+    
+    # Filter paragraphs to only include those with meaningful content (words or numbers)
+    meaningful_paragraphs = []
+    for paragraph in paragraphs:
+        # Remove HTML tags to get plain text
+        plain_text = re.sub(r'<[^>]+>', '', paragraph)
+        # Decode HTML entities
+        plain_text = unescape(plain_text)
+        # Remove extra whitespace
+        plain_text = re.sub(r'\s+', ' ', plain_text).strip()
+        
+        # Check if paragraph contains words or numbers
+        if re.search(r'[a-zA-Z0-9]', plain_text):
+            meaningful_paragraphs.append(paragraph)
+    
+    # Restore tables from placeholders and add them as paragraphs
+    for placeholder, table_html in table_placeholders:
+        # Replace the placeholder in the original HTML with the actual table
+        meaningful_paragraphs.append(table_html)
+    
+    return meaningful_paragraphs
 
 # parse file
 def extract_text_and_citations_per_citation_href(html: str) -> Dict[str, str]:
@@ -108,6 +153,7 @@ def extract_text_and_citations_per_citation_source(html: str) -> Dict[str, str]:
 
     return results
 
+# case I
 def run_href(text: str):
  
     # II. split file
@@ -129,6 +175,7 @@ def run_href(text: str):
     return text_links_per_citation, text_links_per_section
 
 
+# case II
 def run_source(text: str):
  
     # II. split file
@@ -144,6 +191,69 @@ def run_source(text: str):
 
 
     return text_links_per_citation
+
+def extract_text_images_tables_from_md(md_content: str) -> tuple:
+    """
+    Extract plain text (excluding figures, tables, images), HTML, tables, and figures from a Markdown string.
+    Returns (plain_text, html_content, images, tables, figures)
+    - plain_text: all text content, excluding figures, tables, and images
+    - html_content: HTML rendering of the markdown
+    - images: list of image URLs/paths (from markdown and HTML)
+    - tables: list of HTML tables (from both Markdown and raw HTML)
+    - figures: list of <figure>...</figure> blocks (as strings)
+    """
+    # Remove <figure>...</figure> blocks
+    no_figures = re.sub(r'<figure[\s\S]*?>[\s\S]*?</figure>', '', md_content, flags=re.IGNORECASE)
+    # Remove Markdown tables (lines with | and at least one header separator)
+    no_tables = re.sub(r'(^\s*\|.*\|\s*$\n?)+', '', no_figures, flags=re.MULTILINE)
+    # Remove HTML tables
+    no_tables = re.sub(r'<table[\s\S]*?>[\s\S]*?</table>', '', no_tables, flags=re.IGNORECASE)
+    # Remove Markdown images ![alt](url)
+    no_images = re.sub(r'!\[[^\]]*\]\(([^)]+)\)', '', no_tables)
+    # Remove HTML images <img ...>
+    no_images = re.sub(r'<img [^>]*src=["\"][^"\"]+["\"][^>]*>', '', no_images, flags=re.IGNORECASE)
+
+    # Render HTML
+    markdown = mistune.create_markdown(renderer=mistune.HTMLRenderer())
+    html_content = markdown(md_content)
+
+    # Use mistune's AST to extract tables and text
+    class Collector(mistune.HTMLRenderer):
+        def __init__(self):
+            super().__init__()
+            self.tables = []
+            self.text_chunks = []
+        def table(self, header, body):
+            table_html = f"<table>{header}{body}</table>"
+            self.tables.append(table_html)
+            return table_html
+        def text(self, text):
+            self.text_chunks.append(text)
+            return super().text(text)
+    collector = Collector()
+    mistune.create_markdown(renderer=collector)(no_images)
+    plain_text = " ".join(collector.text_chunks).strip()
+
+    # Extract <figure>...</figure> blocks using regex (non-greedy)
+    figure_pattern = re.compile(r'<figure[\s\S]*?>[\s\S]*?</figure>', re.IGNORECASE)
+    figures = figure_pattern.findall(md_content)
+
+    # Extract images from markdown ![alt](url) and HTML <img ... src="...">
+    md_img_pattern = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
+    html_img_pattern = re.compile(r'<img [^>]*src=["\\\']([^"\\\']+)["\\\']', re.IGNORECASE)
+    images = md_img_pattern.findall(md_content) + html_img_pattern.findall(md_content)
+
+    # Extract raw HTML tables
+    html_table_pattern = re.compile(r'<table[\s\S]*?>[\s\S]*?</table>', re.IGNORECASE)
+    html_tables = html_table_pattern.findall(md_content)
+
+    # Combine Markdown and HTML tables, avoiding duplicates
+    all_tables = collector.tables.copy()
+    for tbl in html_tables:
+        if tbl not in all_tables:
+            all_tables.append(tbl)
+
+    return plain_text, html_content, images, all_tables, figures
 
 
 
