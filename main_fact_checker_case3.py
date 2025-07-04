@@ -28,6 +28,9 @@ from token_prices import token_prices_per_million
 import tiktoken
 from sentence_transformers import SentenceTransformer
 import numpy as np
+import requests
+from urllib.parse import urljoin, urlparse
+import time
 
 load_dotenv()  # This loads variables from .env into the environment
 
@@ -110,6 +113,13 @@ def create_langchain_agent(model_name: str):
             model=model_name.replace("anthropic:", ""),
             temperature=0.1,
             api_key=os.environ.get("ANTHROPIC_API_KEY")
+        )
+    elif model_name.startswith("groq:"):
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(
+            model=model_name.replace("groq:", ""),
+            temperature=0.1,
+            api_key=os.environ.get("GROQ_API_KEY")
         )
     elif model_name.startswith("gemini:"):
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -214,6 +224,7 @@ def process_document_with_langchain(agent_executor, text: str, reference: str, m
         input_text = f"""Please fact-check the following document and determine if the information is factually consistent based on the provided reference file.\n\nDocument:\n{text}\n\nReference:\n{reference_clean}\n\nFor each factual claim, check if it is supported or contradicted by the reference file."""
         # Count input tokens
         input_tokens = count_tokens(input_text, model_name)
+        
         # Run the agent with updated instructions
         result = agent_executor.invoke({
             "input": input_text
@@ -662,6 +673,7 @@ def main():
             "OpenAI GPT-4o Mini": "openai:gpt-4o-mini",
             "OpenAI GPT-4.1 Mini": "openai:gpt-4.1-mini",
             "OpenAI o3": "openai:o3",
+            "Groq Llama 2 70B": "groq:llama-3.3-70b-versatile",
             "Gemini 2.0 Flash": "gemini:models/gemini-2.0-flash",
             "Gemini 2.5 Pro": "gemini:models/gemini-2.5-pro",
         }
@@ -688,6 +700,36 @@ def main():
                 api_key_provided = True
                 st.success("✅ OpenAI API key loaded from environment")
                 
+        elif selected_model.startswith("anthropic:"):
+            api_key = st.text_input(
+                "Anthropic API Key", 
+                type="password", 
+                help="Enter your Anthropic API key to use Claude models"
+            )
+            if api_key:
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+                api_key_provided = True
+            elif os.getenv("ANTHROPIC_API_KEY"):
+                api_key_provided = True
+                st.success("✅ Anthropic API key loaded from environment")
+                
+        elif selected_model.startswith("groq:"):
+            api_key = st.text_input(
+                "Groq API Key", 
+                type="password", 
+                help="Enter your Groq API key to use Llama models"
+            )
+            if api_key:
+                os.environ["GROQ_API_KEY"] = api_key
+                api_key_provided = True
+            elif os.getenv("GROQ_API_KEY"):
+                api_key_provided = True
+                st.success("✅ Groq API key loaded from environment")
+        
+        elif selected_model == "llama-2-70b":
+            st.info("No API key required for Llama 2 70B.")
+            api_key_provided = True
+        
         elif selected_model.startswith("gemini:"):
             api_key = st.text_input(
                 "Google Gemini API Key",
