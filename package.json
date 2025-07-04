@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@ai-sdk/google": "^1.2.22"
+  }
+}
