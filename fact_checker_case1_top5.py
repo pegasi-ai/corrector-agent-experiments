@@ -1008,9 +1008,9 @@ def main():
             original_text = st.session_state.original_text
             
             # Overall metrics
-            col2a, col2b, col2c = st.columns(3)
-            with col2a:
-                st.metric("Corrections Found", len(analysis.corrections))
+            col2b, col2c = st.columns(2)
+            # with col2a:
+            #     st.metric("Corrections Found", len(analysis.corrections))
             with col2b:
                 st.metric("Chunks Processed", st.session_state.token_usage.get("chunks_processed", 0))
             with col2c:
